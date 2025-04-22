@@ -1,112 +1,98 @@
-# stock_grader_app.py
-
 import streamlit as st
-import yfinance as yf
+import pandas as pd
+import numpy as np
 
-# ----------------------
-# SCORING FUNCTIONS
-# ----------------------
+st.set_page_config(page_title="Value Investing Analyzer", layout="wide")
 
-def grade_growth(stock):
+st.title("📊 Value Investing Analyzer")
+
+st.sidebar.header("📁 Upload Financial Statements")
+
+balance_sheet_file = st.sidebar.file_uploader("Upload Balance Sheet CSV", type=["csv"])
+income_statement_file = st.sidebar.file_uploader("Upload Income Statement CSV", type=["csv"])
+cash_flow_file = st.sidebar.file_uploader("Upload Cash Flow CSV", type=["csv"])
+valuation_file = st.sidebar.file_uploader("Upload Valuation Metrics CSV (Optional)", type=["csv"])
+
+@st.cache_data
+def load_csv(file):
+    return pd.read_csv(file)
+
+def display_section(title, df):
+    st.subheader(title)
+    st.dataframe(df.style.format("{:,.2f}"), use_container_width=True)
+
+# Load and display
+dfs = {}
+if balance_sheet_file:
+    dfs["Balance Sheet"] = load_csv(balance_sheet_file)
+if income_statement_file:
+    dfs["Income Statement"] = load_csv(income_statement_file)
+if cash_flow_file:
+    dfs["Cash Flow Statement"] = load_csv(cash_flow_file)
+if valuation_file:
+    dfs["Valuation Metrics"] = load_csv(valuation_file)
+
+# Display sections
+for section, df in dfs.items():
+    display_section(section, df)
+
+# ---------------------------
+# Value Investing Metrics
+# ---------------------------
+st.header("📈 Value Investing Analysis")
+
+def analyze(financials):
+    scores = {}
+
     try:
-        revenue_growth = stock.info.get('revenueGrowth', 0)
-        eps_growth = stock.info.get('earningsQuarterlyGrowth', 0)
-        score = (revenue_growth + eps_growth) * 5  # max 10
-        return min(max(score, 0), 10)
-    except:
-        return 0
+        # Extract financials
+        bs = financials["Balance Sheet"]
+        is_ = financials["Income Statement"]
+        cf = financials["Cash Flow Statement"]
+        val = financials.get("Valuation Metrics", pd.DataFrame())
 
-def grade_valuation(stock):
-    try:
-        pe = stock.info.get('forwardPE', 0)
-        peg = stock.info.get('pegRatio', 0)
-        score = 0
-        if 5 < pe < 25:
-            score += 5
-        if 0 < peg < 1.5:
-            score += 5
-        return score
-    except:
-        return 0
+        # Assume most recent year is in first column after the name col
+        year_col = bs.columns[1]
 
-def grade_profitability(stock):
-    try:
-        profit_margin = stock.info.get('profitMargins', 0)
-        return min(max(profit_margin * 100, 0), 10)
-    except:
-        return 0
+        # Calculations
+        total_assets = bs.loc[bs.iloc[:, 0].str.lower().str.contains("total assets"), year_col].values[0]
+        total_liabilities = bs.loc[bs.iloc[:, 0].str.lower().str.contains("total liabilities"), year_col].values[0]
+        total_equity = total_assets - total_liabilities
+        net_income = is_.loc[is_.iloc[:, 0].str.lower().str.contains("net income"), year_col].values[0]
+        revenue = is_.loc[is_.iloc[:, 0].str.lower().str.contains("total revenue"), year_col].values[0]
+        operating_cash_flow = cf.loc[cf.iloc[:, 0].str.lower().str.contains("operating cash flow|net cash from operating"), year_col].values[0]
+        free_cash_flow = cf.loc[cf.iloc[:, 0].str.lower().str.contains("free cash flow|capital expenditures"), year_col].values[0]
 
-def grade_momentum(stock):
-    try:
-        price = stock.info.get('regularMarketPrice', 0)
-        target = stock.info.get('targetMeanPrice', 0)
-        if price == 0:
-            return 0
-        diff = (target - price) / price
-        return min(max(diff * 50, 0), 10)
-    except:
-        return 0
+        # Ratios
+        debt_to_equity = total_liabilities / total_equity
+        return_on_equity = net_income / total_equity
+        fcf_margin = free_cash_flow / revenue
+        ocf_margin = operating_cash_flow / revenue
 
-def grade_risk(stock):
-    try:
-        beta = stock.info.get('beta', 1)
-        if beta < 0.8:
-            return 9
-        elif 0.8 <= beta <= 1.2:
-            return 7
-        elif 1.2 < beta <= 1.6:
-            return 4
-        else:
-            return 2
-    except:
-        return 0
+        scores["Debt to Equity"] = round(debt_to_equity, 2)
+        scores["Return on Equity"] = round(return_on_equity, 2)
+        scores["Free Cash Flow Margin"] = round(fcf_margin, 2)
+        scores["Operating Cash Flow Margin"] = round(ocf_margin, 2)
 
-def letter_grade(score):
-    if score >= 9: return "A+"
-    elif score >= 8: return "A"
-    elif score >= 7: return "B"
-    elif score >= 6: return "C+"
-    elif score >= 5: return "C"
-    else: return "D or F"
+        if not val.empty:
+            pe = val.loc[val.iloc[:, 0].str.lower().str.contains("p/e"), year_col].values[0]
+            pb = val.loc[val.iloc[:, 0].str.lower().str.contains("p/b"), year_col].values[0]
+            scores["Price to Earnings (P/E)"] = round(pe, 2)
+            scores["Price to Book (P/B)"] = round(pb, 2)
 
-# ----------------------
-# STREAMLIT UI
-# ----------------------
+        return scores
+    except Exception as e:
+        st.error(f"❌ Error analyzing financials: {e}")
+        return {}
 
-st.title("AI Stock Screener & Grader")
-ticker_input = st.text_input("Enter stock ticker (e.g. AAPL, PLTR, TSLA)", value="PLTR")
+if dfs:
+    results = analyze(dfs)
+    if results:
+        st.success("📌 Key Financial Ratios:")
+        for k, v in results.items():
+            st.metric(label=k, value=v)
 
-if ticker_input:
-    stock = yf.Ticker(ticker_input)
-    st.subheader(f"{ticker_input.upper()} - Analysis")
-
-    growth = grade_growth(stock)
-    valuation = grade_valuation(stock)
-    profitability = grade_profitability(stock)
-    momentum = grade_momentum(stock)
-    risk = grade_risk(stock)
-
-    scores = {
-        "Growth": growth,
-        "Valuation": valuation,
-        "Profitability": profitability,
-        "Momentum": momentum,
-        "Risk": risk
-    }
-
-    total_score = sum(scores.values()) / 5
-    letter = letter_grade(total_score)
-
-    st.markdown(f"### Final Score: **{total_score:.2f}/10.00** ({letter})")
-
-    st.markdown("### Category Scores")
-    for k, v in scores.items():
-        st.progress(v / 10)
-        st.write(f"{k}: {v:.2f}/10")
-
-# ----------------------
-# To run:
-# ----------------------
-# 1. Save this as stock_grader_app.py
-# 2. In terminal: `pip install streamlit yfinance`
-# 3. Run: `streamlit run stock_grader_app.py`
+# Optional: weighted scoring or ranking
+st.markdown("---")
+st.caption("Upload additional companies to compare and create rankings.")
+`
