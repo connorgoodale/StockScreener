@@ -95,4 +95,3 @@ if dfs:
 # Optional: weighted scoring or ranking
 st.markdown("---")
 st.caption("Upload additional companies to compare and create rankings.")
-`
